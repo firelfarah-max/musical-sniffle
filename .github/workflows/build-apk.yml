@@ -1,0 +1,96 @@
+
+name: Build Nitro Tanger 3D v0.4 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout game
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android platform
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Prepare game files
+        run: |
+          mkdir -p www/vendor www/models
+          cp index.html www/index.html
+          cp node_modules/three/build/three.min.js www/vendor/three.min.js
+          cp node_modules/three/examples/js/loaders/GLTFLoader.js www/vendor/GLTFLoader.js
+
+      - name: Restore cars maps trees and driver
+        shell: bash
+        run: |
+          shopt -s nullglob
+          for model in aventador gt3rs gt3r drift forest maple driver; do
+            parts=(asset_${model}.part*)
+            if (( ${#parts[@]} == 0 )); then
+              echo "Missing asset parts for ${model}" >&2
+              exit 1
+            fi
+            cat "${parts[@]}" > "$RUNNER_TEMP/${model}.gz"
+            gzip -t "$RUNNER_TEMP/${model}.gz"
+            gzip -dc "$RUNNER_TEMP/${model}.gz" > "www/models/${model}.glb"
+            test -s "www/models/${model}.glb"
+            echo "Restored ${model}"
+          done
+
+      - name: Generate Android app
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Landscape orientation
+        run: |
+          python3 - <<'PY2'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          if 'android:screenOrientation=' not in s:
+              s = s.replace(
+                  '<activity',
+                  '<activity android:screenOrientation="landscape"',
+                  1
+              )
+          p.write_text(s)
+          PY2
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nitro-Tanger-v04-APK
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+          
